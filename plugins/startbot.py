@@ -24,7 +24,7 @@ def inline_main_menu(client: Client, inline_query):
                 title="🎮 تنظیمات بازی",
                 description="تعداد سوال، زمان و دعوت از دوستان",
                 input_message_content=InputTextMessageContent(
-                    "🔧 زمان و تعداد و نوع سوالات را مشخص کنید:"
+                    "به ربات سوالات اقتصاد خوش آمدید.\nلطفا زمان و تعداد و نوع سوالات و موضوع را مشخص کنید:"
                 ),
                 reply_markup=my_start_def_glassButton(inline_query.from_user.id)
             )
@@ -36,11 +36,16 @@ def inline_main_menu(client: Client, inline_query):
 def my_start_def_glassButton(user_id):
     # اگه هنوز user_selections ساخته نشده بود، بسازیم
     if user_id not in user_selections:
-        user_selections[user_id] = {"number": None, "time": []}
+        user_selections[user_id] = {
+            "number": None,
+            "time": [],
+            "topics": []
+        }
 
     times = user_selections[user_id]["time"]
     number = user_selections[user_id]["number"]
-
+    topics = user_selections[user_id]["topics"]
+    
     keyboard = InlineKeyboardMarkup(
         [
             [
@@ -84,6 +89,31 @@ def my_start_def_glassButton(user_id):
                 )
             ],
             [
+                InlineKeyboardButton("موضوع مورد نظر را انتخاب کنید", callback_data="selectTopic")
+            ],
+            [
+                InlineKeyboardButton(
+                    text="ریاضی ✅" if "topic_math" in topics else "ریاضی", callback_data="topic_math"
+                ),
+                InlineKeyboardButton(
+                    text="تاریخ ✅" if "topic_history" in topics else "تاریخ", callback_data="topic_history"
+                ),
+                InlineKeyboardButton(
+                    text="علمی ✅" if "topic_science" in topics else "علمی", callback_data="topic_science"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="ادبیات ✅" if "topic_literature" in topics else "ادبیات", callback_data="topic_literature"
+                ),
+                InlineKeyboardButton(
+                    text="ورزش ✅" if "topic_sports" in topics else "ورزش", callback_data="topic_sports"
+                ),
+                InlineKeyboardButton(
+                    text="سینما ✅" if "topic_cinema" in topics else "سینما", callback_data="topic_cinema"
+                )
+            ],
+            [
                 InlineKeyboardButton("🤝 دعوت از دوستان", switch_inline_query="start_quiz")
             ],
             [
@@ -122,15 +152,19 @@ def handle_callback_query(client, callback_query: CallbackQuery):
             user_selections[user_id]["number"] = data
             needs_update = True
 
-    # Handle time selection (multiple choice)
+    # Handle time selection (single choice)
     elif data in ["time10", "time15", "time20"]:
-        if data in user_selections[user_id]["time"]:
-            user_selections[user_id]["time"].remove(data)
+        if user_selections[user_id]["time"] != data:
+            user_selections[user_id]["time"] = data
+            needs_update = True
+    # Handle topic selection (Multiple choice)
+    elif data.startswith("topic_"):
+        if data in user_selections[user_id]["topics"]:
+            user_selections[user_id]["topics"].remove(data)
             needs_update = True
         else:
-            user_selections[user_id]["time"].append(data)
+            user_selections[user_id]["topics"].append(data)
             needs_update = True
-
     # Only update if selections changed
     if needs_update:
         try:
