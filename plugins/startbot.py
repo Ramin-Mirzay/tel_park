@@ -117,7 +117,7 @@ def my_start_def_glassButton(user_id):
                 InlineKeyboardButton("🤝 دعوت از دوستان", switch_inline_query="start_quiz")
             ],
             [
-                InlineKeyboardButton("شروع آزمون", callback_data="start_exam")
+                InlineKeyboardButton("ساخت بازی", callback_data="start_exam")
             ]
         ]
     )
@@ -132,21 +132,95 @@ def handle_callback_query(client, callback_query: CallbackQuery):
 
     user_id = callback_query.from_user.id
     data = callback_query.data
-    
-    # Print debug info when start exam is clicked
+    ############################################################
     if callback_query.data == "start_exam":
         print("***********Im In************")
         print(user_selections)
         
-# check for empty fild in time , number , topics            
         if not user_selections[user_id].get("number", []) or not user_selections[user_id].get("time", []) or not user_selections[user_id].get("topics", []):
             print(user_selections[user_id]["topics"])
             callback_query.answer("یک یا چند فیلد خالی است")
             print(user_selections)
             return
+        else:
+            # ادیت پیام به دکمه‌های جدید
+            new_text = "🎯 لطفاً یکی از گزینه‌ها را انتخاب کنید:"
+            new_keyboard = InlineKeyboardMarkup(
+                [
+                    [InlineKeyboardButton("✅ حاضر", callback_data="ready_now")],
+                    [InlineKeyboardButton("🚀 شروع", callback_data="start_now")],
+                    [InlineKeyboardButton("🔙 برگشت به منوی قبل", callback_data="back_to_menu")]
+                ]
+            )
 
-        return  # Don't process further for start_exam
+            callback_query.edit_message_text(
+                text=new_text,
+                reply_markup=new_keyboard
+            )
 
+            callback_query.answer("✅ آماده‌ای!")
+            return
+
+    # رفتار دکمه‌های جدید
+    elif callback_query.data == "ready_now":
+        callback_query.answer("شما آماده شدید ✅")
+
+    # elif callback_query.data in ["start_now", "back_to_menu"]:
+    #     # برگشت به منوی اصلی انتخاب سوال و زمان
+    #     reply_markup = my_start_def_glassButton(callback_query.from_user.id)
+    #     callback_query.edit_message_text(
+    #         text="🎮 لطفاً تعداد سوال، زمان و موضوع را انتخاب کنید:",
+    #         reply_markup=reply_markup
+    #     )
+    #     callback_query.answer("🔙 برگشت به منو")
+    elif callback_query.data == "start_now":
+        # ساخت صفحه جدید با گزینه 1 و گزینه 2
+        new_text = "👑 لطفاً یکی از گزینه‌ها را انتخاب کنید:"
+        new_keyboard = InlineKeyboardMarkup(
+            [
+                [InlineKeyboardButton("🔵 گزینه 1", callback_data="option_1"),
+                 InlineKeyboardButton("🟢 گزینه 2", callback_data="option_2")],
+                
+            ]
+        )
+
+        callback_query.edit_message_text(
+            text=new_text,
+            reply_markup=new_keyboard
+        )
+        callback_query.answer("✨ شروع شد!")
+
+    elif callback_query.data == "back_to_menu":
+        # برگشت به منوی اصلی
+        reply_markup = my_start_def_glassButton(callback_query.from_user.id)
+        callback_query.edit_message_text(
+            text="🎮 لطفاً تعداد سوال، زمان و موضوع را انتخاب کنید:",
+            reply_markup=reply_markup
+        )
+        callback_query.answer("🔙 برگشت به منو")
+    elif callback_query.data == "option_1":
+       callback_query.answer("🔵 گزینه 1 انتخاب شد")
+
+    elif callback_query.data == "option_2":
+        callback_query.answer("🟢 گزینه 2 انتخاب شد")
+
+
+#################$$$$$$$$$$$$$$$$$$$$$%%%%%%%%%%%%%%%%%%%%%%%%%%%
+#     # Print debug info when start exam is clicked
+#     if callback_query.data == "start_exam":
+#         print("***********Im In************")
+#         print(user_selections)
+        
+# # check for empty fild in time , number , topics            
+#         if not user_selections[user_id].get("number", []) or not user_selections[user_id].get("time", []) or not user_selections[user_id].get("topics", []):
+#             print(user_selections[user_id]["topics"])
+#             callback_query.answer("یک یا چند فیلد خالی است")
+#             print(user_selections)
+#             return
+#         else :
+#             callback_query.answer("شروع بازی")
+#             return  # Don't process further for start_exam
+#################$$$$$$$$$$$$$$$$$$$$$%%%%%%%%%%%%%%%%%%%%%%%%%%%
     # Initialize user selections if not exists
     if user_id not in user_selections:
         user_selections[user_id] = {"number": None, "time": []}
