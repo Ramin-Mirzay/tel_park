@@ -137,6 +137,14 @@ def handle_callback_query(client, callback_query: CallbackQuery):
     if callback_query.data == "start_exam":
         print("***********Im In************")
         print(user_selections)
+        
+# check for empty fild in time , number , topics            
+        if not user_selections[user_id].get("number", []) or not user_selections[user_id].get("time", []) or not user_selections[user_id].get("topics", []):
+            print(user_selections[user_id]["topics"])
+            callback_query.answer("یک یا چند فیلد خالی است")
+            print(user_selections)
+            return
+
         return  # Don't process further for start_exam
 
     # Initialize user selections if not exists
