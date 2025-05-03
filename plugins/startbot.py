@@ -89,6 +89,7 @@ async def handle_callback_query(client: Client, callback_query: CallbackQuery):
         else:
             selections["topics"].append(pure_data)
         needs_update = True
+
     elif pure_data == "start_exam":
         if not selections["number"] or not selections["time"] or not selections["topics"]:
             await callback_query.answer("لطفاً همه فیلدها را انتخاب کنید ❗", show_alert=True)
@@ -97,8 +98,15 @@ async def handle_callback_query(client: Client, callback_query: CallbackQuery):
         game_players[owner_id] = []
         player_choices[owner_id] = {}
 
+        # ساخت متن پیام همراه با لیست بازیکنان
+        players_list = "👥 بازیکنان حاضر:\n" + "\n".join([
+            f"👤 {user.first_name}"
+            for user_id in game_players.get(owner_id, [])
+            if (user := await client.get_users(user_id))  # دریافت اطلاعات کاربر
+        ]) if game_players.get(owner_id) else "⏳ هنوز بازیکنی اضافه نشده!"
+
         await callback_query.edit_message_text(
-            "🎯 لطفاً یکی از گزینه‌ها را انتخاب کنید:",
+            f"🎯 لطفاً یکی از گزینه‌ها را انتخاب کنید:\n\n{players_list}",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("✅ حاضر", callback_data=f"{owner_id}|ready_now")],
                 [InlineKeyboardButton("🚀 شروع", callback_data=f"{owner_id}|start_now")],
@@ -107,15 +115,85 @@ async def handle_callback_query(client: Client, callback_query: CallbackQuery):
         )
         await callback_query.answer("✅ بازی ساخته شد")
         return
+
+
     elif pure_data == "ready_now":
-        if from_user_id != owner_id:
-            if owner_id in game_players and from_user_id not in game_players[owner_id]:
-                game_players[owner_id].append(from_user_id)
-                print(f"👥 بازیکن جدید: {from_user.first_name} (ID: {from_user_id}) به بازی {owner_id} اضافه شد.")
-            await callback_query.answer("شما به بازی اضافه شدید ✅")
-        else:
-            await callback_query.answer("شما سازنده بازی هستید ✅")
+
+        # اگر کاربر (چه سازنده، چه بازیکن) هنوز در لیست نیست، اضافه شود
+
+        if owner_id in game_players and from_user_id not in game_players[owner_id]:
+            game_players[owner_id].append(from_user_id)
+
+            user = await client.get_users(from_user_id)  # دریافت اطلاعات کاربر
+
+            print(f"👤 بازیکن جدید: {user.first_name} (آیدی: {from_user_id}) به بازی اضافه شد.")
+
+        # ساخت متن جدید با لیست بازیکنان
+
+        players_list = "👥 بازیکنان حاضر:\n" + "\n".join([
+
+            f"👤 {(await client.get_users(player_id)).first_name}"
+
+            for player_id in game_players[owner_id]
+
+        ]) if game_players.get(owner_id) else "⏳ هنوز بازیکنی اضافه نشده!"
+
+        try:
+
+            await callback_query.edit_message_text(
+
+                f"🎯 لطفاً یکی از گزینه‌ها را انتخاب کنید:\n\n{players_list}",
+
+                reply_markup=InlineKeyboardMarkup([
+
+                    [InlineKeyboardButton("✅ حاضر", callback_data=f"{owner_id}|ready_now")],
+
+                    [InlineKeyboardButton("🚀 شروع", callback_data=f"{owner_id}|start_now")],
+
+                    [InlineKeyboardButton("🔙 برگشت به منو", callback_data=f"{owner_id}|back_to_menu")]
+
+                ])
+
+            )
+
+        except pyrogram.errors.exceptions.bad_request_400.MessageNotModified:
+
+            pass  # اگر پیام تغییری نکرده، خطا را نادیده بگیر
+
+        await callback_query.answer("✅ شما به لیست بازیکنان اضافه شدید")
+
         return
+    # elif pure_data == "start_exam":
+    #     if not selections["number"] or not selections["time"] or not selections["topics"]:
+    #         await callback_query.answer("لطفاً همه فیلدها را انتخاب کنید ❗", show_alert=True)
+    #         return
+    #
+    #     game_players[owner_id] = []
+    #     player_choices[owner_id] = {}
+    #
+    #     await callback_query.edit_message_text(
+    #         "🎯 لطفاً یکی از گزینه‌ها را انتخاب کنید:",
+    #         reply_markup=InlineKeyboardMarkup([
+    #             [InlineKeyboardButton("✅ حاضر", callback_data=f"{owner_id}|ready_now")],
+    #             [InlineKeyboardButton("🚀 شروع", callback_data=f"{owner_id}|start_now")],
+    #             [InlineKeyboardButton("🔙 برگشت به منو", callback_data=f"{owner_id}|back_to_menu")]
+    #         ])
+    #     )
+    #     await callback_query.answer("✅ بازی ساخته شد")
+    #     return
+    # elif pure_data == "ready_now":
+    #     if from_user_id != owner_id:
+    #         if owner_id in game_players and from_user_id not in game_players[owner_id]:
+    #             game_players[owner_id].append(from_user_id)
+    #             # نمایش نام کاربری و آیدی کاربر
+    #             user_name = from_user.first_name
+    #             if from_user.last_name:
+    #                 user_name += " " + from_user.last_name
+    #             print(f"👤 بازیکن جدید: {user_name} (آیدی: {from_user_id}) به بازی اضافه شد.")
+    #         await callback_query.answer("شما به بازی اضافه شدید ✅")
+    #     else:
+    #         await callback_query.answer("شما سازنده بازی هستید ✅")
+    #     return
     elif pure_data == "start_now":
         time_str = user_selections[owner_id]["time"][0]
         seconds = int(time_str.replace("time", ""))
