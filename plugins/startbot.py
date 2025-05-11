@@ -203,7 +203,7 @@ async def cleanup_expired_games():
                 del games[game_id]
             await asyncio.sleep(300)
         except Exception as e:
-            print(f"خطا در cleanup_expired_games: {str(e)}")
+            print(f"خطا در cleanup_expired_games: {e}")
             await asyncio.sleep(300)
 
 
@@ -353,16 +353,16 @@ def my_start_def_glassButton(game_id):
         [InlineKeyboardButton("📚 انتخاب موضوع", callback_data=cb("selectTopic"))],
         [
             InlineKeyboardButton("اقتصاد کلان ✅" if "topic_economics" in topics else "اقتصاد کلان",
-                                callback_data=cb("topic_economics")),
+                                 callback_data=cb("topic_economics")),
             InlineKeyboardButton("تاریخ ✅" if "topic_history" in topics else "تاریخ",
-                                callback_data=cb("topic_history")),
+                                 callback_data=cb("topic_history")),
             InlineKeyboardButton("علمی ✅" if "topic_science" in topics else "علمی", callback_data=cb("topic_science")),
         ],
         [
             InlineKeyboardButton("ادبیات ✅" if "topic_literature" in topics else "ادبیات",
-                                callback_data=cb("topic_literature")),
+                                 callback_data=cb("topic_literature")),
             InlineKeyboardButton("ورزش ✅" if "topic_sports" in topics else "ورزش",
-                                callback_data=cb("topic_sports")),
+                                 callback_data=cb("topic_sports")),
             InlineKeyboardButton("سینما ✅" if "topic_cinema" in topics else "سینما", callback_data=cb("topic_cinema")),
         ],
         [InlineKeyboardButton("🤝 دعوت از دوستان", switch_inline_query=f"start_quiz_{game_id}")],
@@ -527,27 +527,39 @@ async def handle_callback_query(client: Client, callback_query: CallbackQuery):
 
             await asyncio.sleep(seconds)
 
+        # نمایش نتایج به صورت جدید
         result_lines = ["📊 نتایج بازی:"]
-
-        # مرتب‌سازی بازیکنان بر اساس امتیاز (نزولی)
         sorted_players = sorted(game.players, key=lambda pid: game.scores.get(pid, 0), reverse=True)
 
-        for player_id in sorted_players:
+        for rank, player_id in enumerate(sorted_players, 1):
             player_name = user_cache.get(player_id, await client.get_users(player_id)).first_name
             correct_count = game.scores[player_id]
-            result_lines.append(f"\n👤 {player_name}: {correct_count} پاسخ درست")
-            save_player_score(player_id, player_name, correct_count)
+            result_lines.append(f"{rank}. {player_name}")
+
+            # ساخت ردیف آیکون‌ها برای هر بازیکن
+            status_row = []
             for question_idx in range(total_questions):
                 question_num = question_idx + 1
                 choice = game.choices.get(question_num, {}).get(player_id, None)
                 if choice:
                     _, _, _, correct_answer = game.questions[question_idx]
                     is_correct = choice[-1] == correct_answer[-1]
-                    status = "✅ درست" if is_correct else "❌ اشتباه"
-                    symbol = "🔵 گزینه 1" if choice == "option_1" else "🟢 گزینه 2"
-                    result_lines.append(f"سوال {question_num}: {symbol} ({status})")
+                    status_row.append("✅" if is_correct else "❌")
                 else:
-                    result_lines.append(f"سوال {question_num}: ❓ انتخاب نشده")
+                    status_row.append("☐")
+
+            # تبدیل ردیف آیکون‌ها به رشته
+            status_line = " ".join(status_row)
+            result_lines.append(status_line)
+
+            # شمارش پاسخ‌ها
+            correct_count = status_row.count("✅")
+            wrong_count = status_row.count("❌")
+            unanswered_count = status_row.count("☐")
+            result_lines.append(f"✅ {correct_count} | ❌ {wrong_count} | ☐ {unanswered_count}")
+
+            # ذخیره امتیاز در leaderboard
+            save_player_score(player_id, player_name, correct_count)
 
         try:
             if callback_query.message:
