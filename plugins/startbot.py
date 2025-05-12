@@ -10,11 +10,21 @@ import random
 import os
 from pyrogram.enums import ChatMemberStatus
 
-print("لود پلاگین startbot...")  # دیباگ: تأیید لود پلاگین
+print("لود پلاگین startbot...")
 
 # لیست برای ذخیره سوالات استفاده‌شده
-used_questions = set()  # استفاده از set برای کارایی بهتر
+used_questions = set()
+user_cache = {}
 
+# نگاشت موضوعات به جدول‌های دیتابیس
+TOPIC_TO_TABLE = {
+    "topic_economics": "questions_calan",
+    "topic_history": "questions_history",
+    "topic_science": "questions_science",
+    "topic_literature": "questions_literature",
+    "topic_development": "questions_development",
+    "topic_cinema": "questions_cinema",
+}
 
 class Game:
     def __init__(self, owner_id):
@@ -22,12 +32,12 @@ class Game:
         self.owner_id = owner_id
         self.selections = {"number": None, "time": [], "topics": []}
         self.players = []
-        self.choices = {}  # ساختار: {question_number: {user_id: choice}}
+        self.choices = {}  # {question_number: {user_id: choice}}
         self.created_at = datetime.now()
         self.last_updated = datetime.now()
         self.current_question = 0
         self.questions = []
-        self.scores = {}  # ساختار: {user_id: correct_answers_count}
+        self.scores = {}  # {user_id: correct_answers_count}
 
     def update_timestamp(self):
         self.last_updated = datetime.now()
@@ -46,31 +56,34 @@ class Game:
             return 0
         return int(self.selections["number"][4:])
 
-
 games = {}
-user_cache = {}
-
 
 def init_leaderboard_db():
     db_path = "plugins/questions.db"
     try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS leaderboard (
-                user_id INTEGER,
-                username TEXT,
-                correct_answers INTEGER,
-                game_date TEXT,
-                PRIMARY KEY (user_id, game_date)
-            )
-        """)
-        conn.commit()
-        print("جدول leaderboard با موفقیت ایجاد شد.")
-        conn.close()
+        with sqlite3.connect(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS leaderboard (
+                    user_id INTEGER,
+                    username TEXT,
+                    correct_answers INTEGER,
+                    game_date TEXT,
+                    PRIMARY KEY (user_id, game_date)
+                )
+            """)
+            # ایجاد جدول channel_members
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS channel_members (
+                    user_id INTEGER PRIMARY KEY,
+                    last_updated TEXT,
+                    status TEXT
+                )
+            """)
+            conn.commit()
+            print("جدول‌های leaderboard و channel_members با موفقیت ایجاد شد.")
     except Exception as e:
-        print(f"خطا در ایجاد جدول leaderboard: {e}")
-
+        print(f"خطا در ایجاد جدول‌ها: {e}")
 
 def save_player_score(user_id, username, correct_answers):
     db_path = "plugins/questions.db"
@@ -106,7 +119,6 @@ def save_player_score(user_id, username, correct_answers):
     except Exception as e:
         print(f"خطا در ذخیره/به‌روزرسانی امتیاز بازیکن: {e}")
 
-
 def get_leaderboard():
     db_path = "plugins/questions.db"
     try:
@@ -120,22 +132,85 @@ def get_leaderboard():
             LIMIT 10
         """)
         leaderboard = cursor.fetchall()
-        print(f"داده‌های رتبه‌بندی: {leaderboard}")  # دیباگ: نمایش داده‌های رتبه‌بندی
+        print(f"داده‌های رتبه‌بندی: {leaderboard}")
         conn.close()
         return leaderboard
     except Exception as e:
         print(f"خطا در دریافت رتبه‌بندی: {e}")
         return []
 
+def check_member_in_db(user_id):
+    db_path = "plugins/questions.db"
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT status FROM channel_members WHERE user_id = ?", (user_id,))
+        result = cursor.fetchone()
+        conn.close()
+        return result[0] if result else None
+    except Exception as e:
+        print(f"خطا در چک کردن عضو در پایگاه داده: {e}")
+        return None
+
+def update_member_in_db(user_id, status):
+    db_path = "plugins/questions.db"
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cursor.execute("""
+            INSERT OR REPLACE INTO channel_members (user_id, last_updated, status)
+            VALUES (?, ?, ?)
+        """, (user_id, current_time, status))
+        conn.commit()
+        print(f"وضعیت کاربر {user_id} در پایگاه داده به‌روزرسانی شد: {status}")
+        conn.close()
+    except Exception as e:
+        print(f"خطا در به‌روزرسانی عضو در پایگاه داده: {e}")
+
+async def sync_channel_members(client):
+    try:
+        if not await test_channel_access(client):
+            print("خطا: ربات به کانال @chalesh_yarr دسترسی ندارد یا ادمین نیست.")
+            return
+
+        # ابتدا جدول را خالی می‌کنیم تا فقط اعضای فعلی ذخیره شوند
+        db_path = "plugins/questions.db"
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM channel_members")
+        conn.commit()
+        conn.close()
+
+        members = []
+        async for member in client.get_chat_members("@chalesh_yarr"):
+            user_id = member.user.id
+            status = member.status.value
+            members.append((user_id, status))
+            update_member_in_db(user_id, status)
+
+        print(f"تعداد اعضای همگام‌سازی‌شده از کانال: {len(members)}")
+    except Exception as e:
+        print(f"خطا در همگام‌سازی اعضای کانال: {e}")
+
+async def update_channel_members_periodically(client):
+    while True:
+        try:
+            print("به‌روزرسانی دوره‌ای اعضای کانال...")
+            await sync_channel_members(client)
+            await asyncio.sleep(180)  # 3 دقیقه
+        except Exception as e:
+            print(f"خطا در به‌روزرسانی دوره‌ای اعضای کانال: {e}")
+            await asyncio.sleep(180)
 
 async def test_channel_access(client):
     try:
         chat = await client.get_chat("@chalesh_yarr")
         print(f"دسترسی به کانال موفق: {chat.title}")
         bot_id = (await client.get_me()).id
-        chat_member = await client.get_chat_member("@chalesh_yarr", bot_id)
-        print(f"وضعیت ربات در کانال @chalesh_yarr: {chat_member.status}")
-        if chat_member.status not in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
+        chatTotals = await client.get_chat_member("@chalesh_yarr", bot_id)
+        print(f"وضعیت ربات در کانال @chalesh_yarr: {chatTotals.status}")
+        if chatTotals.status not in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
             print("خطا: ربات در کانال @chalesh_yarr ادمین نیست!")
             return False
         return True
@@ -143,28 +218,39 @@ async def test_channel_access(client):
         print(f"خطا در دسترسی به کانال @chalesh_yarr: {str(e)}")
         return False
 
+async def check_membership_with_retry(client, chat_id, user_id, retries=2, delay=1):
+    for attempt in range(retries):
+        try:
+            chat_member = await client.get_chat_member(chat_id, user_id)
+            return chat_member.status
+        except pyrogram.errors.exceptions.bad_request_400.UserNotParticipant:
+            if attempt == retries - 1:
+                return "NOT_MEMBER"
+            await asyncio.sleep(delay)
+        except Exception as e:
+            print(f"خطا در بررسی عضویت (تلاش {attempt + 1}): {e}")
+            await asyncio.sleep(delay)
+    return "NOT_MEMBER"
 
 async def start_background_tasks(client):
-    print("ثبت تسک‌های پس‌زمینه در پلاگین startbot...")  # دیباگ: تأیید ثبت
+    print("ثبت تسک‌های پس‌زمینه در پلاگین startbot...")
     try:
         asyncio.create_task(cleanup_expired_games())
         asyncio.create_task(announce_leaderboard(client))
+        asyncio.create_task(update_channel_members_periodically(client))  # اضافه کردن تسک به‌روزرسانی
         print("تسک‌های پس‌زمینه با موفقیت ثبت شدند.")
     except Exception as e:
         print(f"خطا در ثبت تسک‌های پس‌زمینه: {str(e)}")
 
-
 async def announce_leaderboard(client):
-    print("شروع تابع announce_leaderboard...")  # دیباگ: تأیید شروع
+    print("شروع تابع announce_leaderboard...")
     while True:
         try:
-            print("چک کردن دسترسی به کانال...")
             if not await test_channel_access(client):
                 print("خطا: ربات به کانال @chalesh_yarr دسترسی ندارد یا ادمین نیست.")
-                await asyncio.sleep(10)  # برای تست، 10 ثانیه
+                await asyncio.sleep(300)
                 continue
 
-            print("دریافت داده‌های رتبه‌بندی...")
             leaderboard = get_leaderboard()
             if leaderboard:
                 message_lines = ["🏆 رتبه‌بندی بازیکنان برتر در چالش یار:"]
@@ -177,26 +263,22 @@ async def announce_leaderboard(client):
                     text=message,
                     disable_web_page_preview=True
                 )
-                print("پیام رتبه‌بندی با موفقیت ارسال شد.")
             else:
-                print("هیچ اطلاعاتی در رتبه‌بندی موجود نیست.")
                 message = "🏆 هنوز هیچ بازیکنی در رتبه‌بندی ثبت نشده است!"
                 await client.send_message(
                     chat_id="@chalesh_yarr",
                     text=message,
                     disable_web_page_preview=True
                 )
-                print("پیام خالی بودن رتبه‌بندی ارسال شد.")
-            await asyncio.sleep(10)  # برای تست، 10 ثانیه (برای تولید به 600 تغییر دهید)
+            await asyncio.sleep(300)  # 5 دقیقه
         except Exception as e:
             print(f"خطا در announce_leaderboard: {str(e)}")
-            await asyncio.sleep(10)  # برای تست، 10 ثانیه
-
+            await asyncio.sleep(300)
 
 async def cleanup_expired_games():
     while True:
         try:
-            print("اجرای تابع cleanup_expired_games...")  # دیباگ
+            print("اجرای تابع cleanup_expired_games...")
             expired_games = [game_id for game_id, game in games.items() if game.is_expired()]
             for game_id in expired_games:
                 print(f"🗑️ بازی {game_id} به دلیل عدم فعالیت حذف شد.")
@@ -205,7 +287,6 @@ async def cleanup_expired_games():
         except Exception as e:
             print(f"خطا در cleanup_expired_games: {e}")
             await asyncio.sleep(300)
-
 
 def test_db_connection():
     db_path = "plugins/questions.db"
@@ -219,65 +300,94 @@ def test_db_connection():
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
         tables = cursor.fetchall()
         print(f"جدول‌های موجود در پایگاه داده: {tables}")
-        table_names = [table[0] for table in tables]
-        if "questions_calan" not in table_names:
-            print("خطا: جدول questions_calan در پایگاه داده وجود ندارد!")
-            conn.close()
-            return False
         conn.close()
         return True
     except Exception as e:
         print(f"خطا در تست اتصال به پایگاه داده: {e}")
         return False
 
-
-def get_random_questions(topic, num_questions):
+def get_random_questions(table_name, num_questions):
     db_path = "plugins/questions.db"
     try:
         if not os.path.exists(db_path):
             raise FileNotFoundError(f"فایل پایگاه داده {db_path} پیدا نشد!")
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
-        table_name = f"questions_{topic}"
         cursor.execute(f"SELECT question, option1, option2, correct_answer FROM {table_name}")
         questions = cursor.fetchall()
         conn.close()
         print(f"تعداد سوالات دریافت‌شده از جدول {table_name}: {len(questions)}")
 
-        # فیلتر کردن سوالات استفاده‌نشده
         available_questions = [q for q in questions if str(q) not in used_questions]
-        print(f"تعداد سوالات موجود (استفاده‌نشده): {len(available_questions)}")
+        print(f"تعداد سوالات موجود (استفاده‌نشده) در {table_name}: {len(available_questions)}")
 
         if len(available_questions) < num_questions:
-            print("هشدار: سوالات موجود کافی نیست، ریست کردن سوالات استفاده‌شده...")
-            used_questions.clear()  # ریست کردن سوالات استفاده‌شده
+            print(f"هشدار: سوالات موجود در {table_name} کافی نیست، ریست کردن سوالات استفاده‌شده...")
+            used_questions.clear()
             available_questions = questions
 
         if len(available_questions) < num_questions:
             raise ValueError(
-                f"تعداد سوالات کافی در جدول {table_name} وجود ندارد! نیاز به {num_questions} سوال، اما {len(available_questions)} سوال موجود است.")
+                f"تعداد سوالات کافی در جدول {table_name} وجود ندارد! نیاز به {num_questions} سوال، اما {len(available_questions)} سوال موجود است."
+            )
 
-        # انتخاب تصادفی سوالات
         selected_questions = random.sample(available_questions, num_questions)
-
-        # اضافه کردن سوالات انتخاب‌شده به لیست استفاده‌شده
         for q in selected_questions:
             used_questions.add(str(q))
-
-        print(f"سوالات انتخاب‌شده: {len(selected_questions)}")
+        print(f"سوالات انتخاب‌شده از {table_name}: {len(selected_questions)}")
         return selected_questions
     except Exception as e:
-        print(f"خطا در دریافت سوالات: {e}")
+        print(f"خطا در دریافت سوالات از {table_name}: {e}")
         return []
 
+def get_combined_questions(topics, total_questions):
+    """
+    انتخاب سوالات ترکیبی از چندین موضوع.
+    - topics: لیست موضوعات انتخاب‌شده (مثل ['topic_economics', 'topic_development'])
+    - total_questions: تعداد کل سوالات موردنیاز
+    """
+    try:
+        if not topics:
+            raise ValueError("هیچ موضوعی انتخاب نشده است!")
 
-# تابع برای ساخت کیبورد گزینه‌ها
+        # تعداد سوالات برای هر موضوع
+        num_topics = len(topics)
+        questions_per_topic = max(1, total_questions // num_topics)  # حداقل یک سوال برای هر موضوع
+        remaining_questions = total_questions - (questions_per_topic * num_topics)
+
+        all_questions = []
+        for topic in topics:
+            table_name = TOPIC_TO_TABLE.get(topic)
+            if not table_name:
+                print(f"هشدار: جدول برای موضوع {topic} تعریف نشده است!")
+                continue
+
+            # تعداد سوالات برای این موضوع
+            num_questions = questions_per_topic
+            if remaining_questions > 0:
+                num_questions += 1
+                remaining_questions -= 1
+
+            questions = get_random_questions(table_name, min(num_questions, total_questions - len(all_questions)))
+            all_questions.extend(questions)
+
+        # اگر تعداد سوالات کافی نبود، از موضوعات تصادفی سوالات اضافی بگیریم
+        while len(all_questions) < total_questions and remaining_questions > 0:
+            random_topic = random.choice(topics)
+            table_name = TOPIC_TO_TABLE.get(random_topic)
+            extra_questions = get_random_questions(table_name, 1)
+            if extra_questions:
+                all_questions.extend(extra_questions)
+                remaining_questions -= 1
+
+        # مخلوط کردن سوالات برای ترتیب تصادفی
+        random.shuffle(all_questions)
+        return all_questions[:total_questions]
+    except Exception as e:
+        print(f"خطا در انتخاب سوالات ترکیبی: {e}")
+        return []
+
 def create_options_keyboard(game_id, option1, option2, max_length=20):
-    """
-    ساخت کیبورد اینلاین برای گزینه‌ها بر اساس طول متن.
-    اگر متن گزینه‌ها طولانی باشد، هر گزینه در یک ردیف قرار می‌گیرد.
-    max_length: حداکثر طول متنی که در یک ردیف کنار هم قرار می‌گیرد.
-    """
     is_long = len(option1) > max_length or len(option2) > max_length
     if is_long:
         return InlineKeyboardMarkup([
@@ -292,14 +402,12 @@ def create_options_keyboard(game_id, option1, option2, max_length=20):
             ]
         ])
 
-
 print("تست اتصال به پایگاه داده...")
 if not test_db_connection():
     print("اسکریپت متوقف شد به دلیل مشکل در اتصال به پایگاه داده.")
     exit(1)
 
 init_leaderboard_db()
-
 
 @Client.on_inline_query()
 async def inline_main_menu(client: Client, inline_query):
@@ -329,7 +437,6 @@ async def inline_main_menu(client: Client, inline_query):
         ],
         cache_time=1
     )
-
 
 def my_start_def_glassButton(game_id):
     game = games.get(game_id)
@@ -361,15 +468,14 @@ def my_start_def_glassButton(game_id):
         [
             InlineKeyboardButton("ادبیات ✅" if "topic_literature" in topics else "ادبیات",
                                  callback_data=cb("topic_literature")),
-            InlineKeyboardButton("ورزش ✅" if "topic_sports" in topics else "ورزش",
-                                 callback_data=cb("topic_sports")),
+            InlineKeyboardButton("توسعه ✅" if "topic_development" in topics else "توسعه",
+                                 callback_data=cb("topic_development")),
             InlineKeyboardButton("سینما ✅" if "topic_cinema" in topics else "سینما", callback_data=cb("topic_cinema")),
         ],
         [InlineKeyboardButton("🤝 دعوت از دوستان", switch_inline_query=f"start_quiz_{game_id}")],
         [InlineKeyboardButton("🎮 ساخت بازی", callback_data=cb("start_exam"))],
         [InlineKeyboardButton("🗑️ لغو بازی", callback_data=cb("cancel_game"))]
     ])
-
 
 @Client.on_callback_query()
 async def handle_callback_query(client: Client, callback_query: CallbackQuery):
@@ -430,22 +536,23 @@ async def handle_callback_query(client: Client, callback_query: CallbackQuery):
         return
     elif pure_data == "ready_now":
         if not await test_channel_access(client):
-            print(f"خطا: ربات به کانال @chalesh_yarr دسترسی ندارد.")
             await callback_query.answer(
                 "⚠️ خطای دسترسی ربات! لطفاً ادمین ربات را در کانال @chalesh_yarr بررسی کنید.",
                 show_alert=True
             )
             return
 
-        try:
-            chat_member = await client.get_chat_member("@chalesh_yarr", from_user_id)
-            print(f"وضعیت کاربر {from_user_id} در کانال @chalesh_yarr: {chat_member.status}")
-
-            if chat_member.status in [ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
-                if from_user_id not in game.players:
-                    game.players.append(from_user_id)
+        # ابتدا چک کردن در پایگاه داده
+        status_from_db = check_member_in_db(from_user_id)
+        if status_from_db and status_from_db in ["member", "administrator", "owner", "restricted"]:
+            if from_user_id in game.players:
+                await callback_query.answer("✅ شما به بازی پیوسته‌اید", show_alert=True)
+                return
+            else:
+                game.players.append(from_user_id)
+                if from_user_id not in user_cache:
                     user_cache[from_user_id] = from_user
-                    print(f"👤 بازیکن جدید: {from_user.first_name} (آیدی: {from_user_id}) به بازی {game_id} اضافه شد.")
+                print(f"👤 بازیکن جدید: {from_user.first_name} (آیدی: {from_user_id}) به بازی {game_id} اضافه شد.")
 
                 await callback_query.edit_message_text(
                     f"🎯 لطفاً یکی از گزینه‌ها را انتخاب کنید:\n\n{game.get_settings_summary()}\n\n{await get_players_list(client, game_id)}\n\n📢 برای شرکت در بازی باید عضو کانال چالش-یار (@chalesh_yarr) باشید.",
@@ -457,24 +564,59 @@ async def handle_callback_query(client: Client, callback_query: CallbackQuery):
                     ])
                 )
                 await callback_query.answer("✅ شما به لیست بازیکنان اضافه شدید")
+                return
+        else:
+            # اگر کاربر در پایگاه داده نبود، عضویت را چک کنیم
+            status = await check_membership_with_retry(client, "@chalesh_yarr", from_user_id)
+            print(f"وضعیت کاربر {from_user_id} در کانال @chalesh_yarr: {status}")
+
+            if status in [ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER, ChatMemberStatus.RESTRICTED]:
+                update_member_in_db(from_user_id, status.value)
+                if from_user_id in game.players:
+                    await callback_query.answer("✅ شما به بازی پیوسته‌اید", show_alert=True)
+                    return
+                else:
+                    game.players.append(from_user_id)
+                    if from_user_id not in user_cache:
+                        user_cache[from_user_id] = from_user
+                    print(f"👤 بازیکن جدید: {from_user.first_name} (آیدی: {from_user_id}) به بازی {game_id} اضافه شد.")
+
+                    await callback_query.edit_message_text(
+                        f"🎯 لطفاً یکی از گزینه‌ها را انتخاب کنید:\n\n{game.get_settings_summary()}\n\n{await get_players_list(client, game_id)}\n\n📢 برای شرکت در بازی باید عضو کانال چالش-یار (@chalesh_yarr) باشید.",
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("✅ حاضر", callback_data=f"{game_id}|ready_now")],
+                            [InlineKeyboardButton("🚀 شروع", callback_data=f"{game_id}|start_now")],
+                            [InlineKeyboardButton("🔙 برگشت به منو", callback_data=f"{game_id}|back_to_menu")],
+                            [InlineKeyboardButton("🗑️ لغو بازی", callback_data=f"{game_id}|cancel_game")]
+                        ])
+                    )
+                    await callback_query.answer("✅ شما به لیست بازیکنان اضافه شدید")
             else:
-                print(f"وضعیت غیرمجاز برای کاربر {from_user_id}: {chat_member.status}")
-                await callback_query.answer("⛔ لطفاً ابتدا عضو کانال چالش-یار (@chalesh_yarr) شوید!", show_alert=True)
-        except pyrogram.errors.exceptions.bad_request_400.UserNotParticipant:
-            print(f"کاربر {from_user_id} در کانال @chalesh_yarr حضور ندارد.")
-            await callback_query.answer("⛔ لطفاً ابتدا عضو کانال چالش-یار (@chalesh_yarr) شوید!", show_alert=True)
-        except pyrogram.errors.exceptions.bad_request_400.ChatAdminRequired:
-            print(f"خطا: ربات در کانال @chalesh_yarr ادمین نیست یا دسترسی کافی ندارد.")
-            await callback_query.answer(
-                "⚠️ خطای دسترسی ربات! لطفاً ادمین ربات را در کانال @chalesh_yarr بررسی کنید.",
-                show_alert=True
-            )
-        except Exception as e:
-            print(f"خطا در بررسی عضویت کاربر {from_user_id}: {str(e)}")
-            await callback_query.answer(
-                f"⚠️ خطایی رخ داد: {str(e)}. لطفاً دوباره تلاش کنید یا با ادمین تماس بگیرید.",
-                show_alert=True
-            )
+                print(f"کاربر {from_user_id} عضو کانال نیست: {status}")
+                await callback_query.answer(
+                    "⛔ لطفاً ابتدا عضو کانال چالش-یار شوید! 👉 @chalesh_yarr",
+                    show_alert=True
+                )
+        return
+    elif pure_data in ["option_1", "option_2"]:
+        if from_user_id not in game.players:
+            await callback_query.answer("⛔ شما در این بازی حضور ندارید!", show_alert=True)
+            return
+
+        current_question = game.current_question
+        if current_question not in game.choices:
+            game.choices[current_question] = {}
+
+        if from_user_id in game.choices[current_question]:
+            await callback_query.answer("⚠️ شما قبلاً برای این سوال گزینه‌ای انتخاب کرده‌اید", show_alert=True)
+            return
+
+        game.choices[current_question][from_user_id] = pure_data
+        question_text, _, _, correct_answer = game.questions[current_question - 1]
+        is_correct = pure_data[-1] == correct_answer[-1]
+        if is_correct:
+            game.scores[from_user_id] = game.scores.get(from_user_id, 0) + 1
+        await callback_query.answer("✅ پاسخ درست!" if is_correct else "❌ پاسخ نادرست!", show_alert=True)
         return
     elif pure_data == "start_now":
         if from_user_id != owner_id:
@@ -497,14 +639,11 @@ async def handle_callback_query(client: Client, callback_query: CallbackQuery):
         seconds = int(time_str.replace("time", ""))
         total_questions = game.get_total_questions()
 
-        if "topic_economics" in selections["topics"]:
-            game.questions = get_random_questions("calan", total_questions)
-        else:
-            await callback_query.answer("⚠️ موضوع اقتصاد کلان انتخاب نشده است!", show_alert=True)
-            return
+        # بارگذاری سوالات ترکیبی از موضوعات انتخاب‌شده
+        game.questions = get_combined_questions(selections["topics"], total_questions)
 
         if not game.questions:
-            await callback_query.answer("⚠️ خطا در بارگذاری سوالات!", show_alert=True)
+            await callback_query.answer("⚠️ خطا در بارگذاری سوالات! لطفاً موضوعات دیگر را انتخاب کنید.", show_alert=True)
             return
 
         for player_id in game.players:
@@ -527,16 +666,13 @@ async def handle_callback_query(client: Client, callback_query: CallbackQuery):
 
             await asyncio.sleep(seconds)
 
-        # نمایش نتایج به صورت جدید
         result_lines = ["📊 نتایج بازی:"]
         sorted_players = sorted(game.players, key=lambda pid: game.scores.get(pid, 0), reverse=True)
 
         for rank, player_id in enumerate(sorted_players, 1):
             player_name = user_cache.get(player_id, await client.get_users(player_id)).first_name
-            correct_count = game.scores[player_id]
             result_lines.append(f"{rank}. {player_name}")
 
-            # ساخت ردیف آیکون‌ها برای هر بازیکن
             status_row = []
             for question_idx in range(total_questions):
                 question_num = question_idx + 1
@@ -548,17 +684,14 @@ async def handle_callback_query(client: Client, callback_query: CallbackQuery):
                 else:
                     status_row.append("☐")
 
-            # تبدیل ردیف آیکون‌ها به رشته
             status_line = " ".join(status_row)
             result_lines.append(status_line)
 
-            # شمارش پاسخ‌ها
             correct_count = status_row.count("✅")
             wrong_count = status_row.count("❌")
             unanswered_count = status_row.count("☐")
             result_lines.append(f"✅ {correct_count} | ❌ {wrong_count} | ☐ {unanswered_count}")
 
-            # ذخیره امتیاز در leaderboard
             save_player_score(player_id, player_name, correct_count)
 
         try:
@@ -579,23 +712,12 @@ async def handle_callback_query(client: Client, callback_query: CallbackQuery):
             await callback_query.answer("⚠️ خطایی در نمایش نتایج رخ داد", show_alert=True)
 
         return
-    elif pure_data in ["option_1", "option_2"]:
-        current_question = game.current_question
-        if current_question not in game.choices:
-            game.choices[current_question] = {}
-
-        if from_user_id in game.choices[current_question]:
-            await callback_query.answer("⚠️ شما قبلاً برای این سوال گزینه‌ای انتخاب کرده‌اید", show_alert=True)
+    elif pure_data in ["back_to_menu", "cancel_game"]:
+        if from_user_id != owner_id:
+            await callback_query.answer("⛔ فقط سازنده می‌تواند این عمل را انجام دهد", show_alert=True)
             return
 
-        game.choices[current_question][from_user_id] = pure_data
-        question_text, _, _, correct_answer = game.questions[current_question - 1]
-        is_correct = pure_data[-1] == correct_answer[-1]
-        if is_correct:
-            game.scores[from_user_id] = game.scores.get(from_user_id, 0) + 1
-        await callback_query.answer("✅ پاسخ درست!" if is_correct else "❌ پاسخ نادرست!", show_alert=True)
-        return
-    elif pure_data == "back_to_menu":
+    if pure_data == "back_to_menu":
         await callback_query.edit_message_text(
             f"🎮 لطفاً تعداد سوال، زمان و موضوع را انتخاب کنید:\n\n{game.get_settings_summary()}",
             reply_markup=my_start_def_glassButton(game_id)
@@ -603,9 +725,6 @@ async def handle_callback_query(client: Client, callback_query: CallbackQuery):
         await callback_query.answer("🔙 برگشت به منو")
         return
     elif pure_data == "cancel_game":
-        if from_user_id != owner_id:
-            await callback_query.answer("⛔ فقط سازنده می‌تواند بازی را لغو کند", show_alert=True)
-            return
         await callback_query.edit_message_text("🗑️ بازی لغو شد.")
         del games[game_id]
         await callback_query.answer("✅ بازی لغو شد")
@@ -623,19 +742,29 @@ async def handle_callback_query(client: Client, callback_query: CallbackQuery):
     else:
         await callback_query.answer("⚠️ این گزینه از قبل انتخاب شده")
 
-
 async def get_players_list(client, game_id):
     game = games.get(game_id, Game(0))
     if not game.players:
         return "⏳ هنوز بازیکنی اضافه نشده!"
 
+    missing_users = [user_id for user_id in game.players if user_id not in user_cache]
+    if missing_users:
+        try:
+            users = await client.get_users(missing_users)
+            for user in users:
+                user_cache[user.id] = user
+            await asyncio.sleep(0.1)
+        except Exception as e:
+            print(f"خطا در دریافت اطلاعات کاربران: {e}")
+
     players_list = []
     for user_id in game.players:
-        if user_id not in user_cache:
-            user_cache[user_id] = await client.get_users(user_id)
-        players_list.append(f"👤 {user_cache[user_id].first_name}")
+        if user_id in user_cache:
+            players_list.append(f"👤 {user_cache[user_id].first_name}")
+        else:
+            players_list.append(f"👤 کاربر ناشناس (ID: {user_id})")
 
     return "👥 بازیکنان حاضر:\n" + "\n".join(players_list)
 
+print("پلاگین startbot با موفقیت لود شد.")
 
-print("پلاگین startbot با موفقیت لود شد.")  # دیباگ: تأیید لود کامل
